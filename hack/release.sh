@@ -22,8 +22,6 @@ function prepare_release_artefacts() {
   ${HELM} template telemetry helm --set experimental.enabled=true --set regular.enabled=false --set nameOverride=telemetry --set manager.container.image.repository=${MANAGER_IMAGE_EXPERIMENTAL} --namespace kyma-system >telemetry-manager-experimental.yaml
   # Rename the file for Telemetry default CR to have a better naming as a release artefact
   cp ./samples/operator_v1alpha1_telemetry.yaml telemetry-default-cr.yaml
-  # Create the Helm chart package
-  ${HELM} package helm
 }
 
 get_previous_release_version() {

@@ -41,6 +41,20 @@ jobs:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           GORELEASER_CURRENT_TAG: "${{ github.ref_name }}" # Explicitly set release tag to avoid ambiguity
 
+      - name: Package Helm chart
+        run: |
+          OUTPUT=$(helm package ./helm -d ./)
+          FILENAME=$(echo $OUTPUT | grep -o '[^ ]*.tgz')
+          echo "HELM_CHART=$FILENAME" >> $GITHUB_ENV
+
+      - name: Upload packaged KEB chart to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        run: |
+          [[ ! -e ${HELM_CHART} ]] && echo "::error ::Packaged Helm chart does not exist" && exit 1
+
+          gh release upload ${{ inputs.name }} --clobber ${HELM_CHART}
       - name: Commit and push Helm chart metadata
         run: |
           git checkout gh-pages
