@@ -47,14 +47,14 @@ jobs:
           FILENAME=$(echo $OUTPUT | grep -o '[^ ]*.tgz')
           echo "HELM_CHART=$FILENAME" >> $GITHUB_ENV
 
-      - name: Upload packaged KEB chart to release
+      - name: Upload packaged Helm chart to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         run: |
           [[ ! -e ${HELM_CHART} ]] && echo "::error ::Packaged Helm chart does not exist" && exit 1
 
-          gh release upload ${{ inputs.name }} --clobber ${HELM_CHART}
+          gh release upload ${{ github.ref_name }} --clobber ${HELM_CHART}
       - name: Commit and push Helm chart metadata
         run: |
           git checkout gh-pages
