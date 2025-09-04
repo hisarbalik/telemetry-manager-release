@@ -2,8 +2,6 @@ name: Tag Release
 
 env:
   KYMA_TELEMETRY_MANAGER_REPO: ${{ github.repository_owner }}/telemetry-manager-release
-  GIT_EMAIL: hisarbalik@hotmail.com
-  GIT_NAME: hisarbalik
 
 permissions:
   contents: read
