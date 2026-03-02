@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "telemetry-manager.fullname" . }}-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/part-of: telemetry
+    kyma-project.io/module: telemetry
+  {{- include "telemetry-manager.labels" . | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: telemetry
+      app.kubernetes.io/name: manager
+      control-plane: telemetry-manager
+      kyma-project.io/component: controller
+    {{- include "telemetry-manager.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: telemetry
+        app.kubernetes.io/name: manager
+        control-plane: telemetry-manager
+        kyma-project.io/component: controller
+        kyma-project.io/module: telemetry
+      {{- include "telemetry-manager.selectorLabels" . | indent 8 }}
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        sidecar.istio.io/inject: "false"
+    spec:
+      {{- if .Values.global.imagePullSecret.enabled }}
+      imagePullSecrets:
+      - name: {{ .Values.global.imagePullSecret.name }}
+      {{- end }}
+      containers:
+      - args:
+        {{- range $key, $value := .Values.manager.container.args }}
+        - --{{ $key }}={{ $value }}
+        {{- end }}
+        {{- if not (empty .Values.additionalMetadata.labels) }}
+        {{- range $k, $v := .Values.additionalMetadata.labels }}
+        - --additional-label={{ (printf "%s=%s" $k $v) }}
+        {{- end }}
+        {{- end }}
+        {{- if not (empty .Values.additionalMetadata.annotations) }}
+        {{- range $k, $v := .Values.additionalMetadata.annotations }}
+        - --additional-annotation={{ (printf "%s=%s" $k $v) }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.global.imagePullSecret.enabled }}
+        - --image-pull-secret-name={{ .Values.global.imagePullSecret.name }}
+        {{- end }}
+        {{- if .Values.global.caBundle.enabled }}
+        - --cluster-trust-bundle-name={{ .Values.global.caBundle.name }}
+        {{- end }}
+        {{- if .Values.experimental.enabled }}
+        - --deploy-otlp-gateway=true
+        - --unlimited-pipelines=true
+        {{- end }}
+        command:
+        - /manager
+        env:
+        - name: GOMEMLIMIT
+          value: {{ quote .Values.manager.container.env.gomemlimit }}
+        - name: APP_LOG_LEVEL
+          value: {{ quote .Values.manager.container.env.appLogLevel }}
+        - name: MANAGER_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: TARGET_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: FLUENT_BIT_IMAGE
+          value: {{ quote .Values.manager.container.env.fluentBitImage }}
+        - name: FLUENT_BIT_EXPORTER_IMAGE
+          value: {{ quote .Values.manager.container.env.fluentBitExporterImage }}
+        - name: OTEL_COLLECTOR_IMAGE
+          value: {{ quote .Values.manager.container.env.otelCollectorImage }}
+        - name: SELF_MONITOR_IMAGE
+          value: {{ quote .Values.manager.container.env.selfMonitorImage }}
+        - name: SELF_MONITOR_FIPS_IMAGE
+          value: {{ quote .Values.manager.container.env.selfMonitorFIPSImage }}
+        - name: ALPINE_IMAGE
+          value: {{ quote .Values.manager.container.env.alpineImage }}
+        {{- if .Values.manager.container.env.operateInFipsMode }}
+        - name: KYMA_FIPS_MODE_ENABLED
+          value: {{ quote .Values.manager.container.env.operateInFipsMode }}
+        {{- end }}
+        image: {{ .Values.manager.container.image.repository }}
+        imagePullPolicy: {{ .Values.manager.container.image.pullPolicy }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        name: manager
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources: {{- toYaml .Values.manager.container.resources | nindent 10 }}
+        securityContext: {{- toYaml .Values.manager.container.securityContext | nindent 10 }}
+        volumeMounts:
+        - mountPath: /tmp
+          name: crt-volume
+      priorityClassName: telemetry-priority-class
+      securityContext: {{- toYaml .Values.manager.securityContext | nindent 8 }}
+      serviceAccountName: {{ include "telemetry-manager.fullname" . }}-manager
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - emptyDir: {}
+        name: crt-volume
+
+

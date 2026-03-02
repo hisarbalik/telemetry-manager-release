@@ -1,0 +1,387 @@
+opentelemetry-collector:
+  enabled: false
+jaeger:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
+opensearch:
+  enabled: false
+
+default:
+  envOverrides:
+  - name: OTEL_SERVICE_NAME
+    valueFrom:
+      fieldRef:
+        apiVersion: v1
+        fieldPath: "metadata.labels['app.kubernetes.io/name']"
+
+components:
+  accounting:
+    enabled: true
+    podAnnotations:
+      oneagent.dynatrace.com/inject: "false" # Seem to not work with .NET
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 300Mi
+
+  ad:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 500Mi
+
+  cart:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      limits:
+        memory: 200Mi
+
+  checkout:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      requests:
+        memory: 10Mi
+      limits:
+        memory: 200Mi
+
+  currency:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      limits:
+        memory: 200Mi
+
+  email:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4318/v1/traces'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4318/v1/metrics'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4318/v1/metrics'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8080
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 150Mi
+
+  fraud-detection:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 700Mi
+
+  frontend:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8080
+    resources:
+      limits:
+        memory: 500Mi
+    podAnnotations:
+      traffic.sidecar.istio.io/excludeInboundPorts: "8080"
+
+  frontend-proxy:
+    enabled: true
+    envOverrides:
+      - name: OTEL_COLLECTOR_HOST
+        value: 'telemetry-otlp-traces.kyma-system'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8080
+    resources:
+      limits:
+        memory: 150Mi
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+    
+  image-provider:
+    enabled: true
+    envOverrides:
+      - name: OTEL_COLLECTOR_HOST
+        value: 'telemetry-otlp-traces.kyma-system'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8081
+    resources:
+      limits:
+        memory: 150Mi
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+
+  load-generator:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+      - name: LOCUST_USERS
+        value: '2'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8089
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 2500Mi
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+
+  payment:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      limits:
+        memory: 300Mi
+
+  postgresql:
+    enabled: true
+    resources:
+      limits:
+        memory: 200Mi
+
+  product-catalog:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      requests:
+        memory: 20Mi
+      limits:
+        memory: 200Mi
+
+  quote:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: http
+        value: 8080
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 200Mi
+
+  recommendation:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+
+  shipping:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    service:
+      port: null
+    ports:
+      - name: grpc
+        value: 8080
+    resources:
+      limits:
+        memory: 200Mi
+
+  flagd:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    resources:
+      requests:
+        memory: 50Mi
+      limits:
+        memory: 400Mi
+    podAnnotations:
+      sidecar.istio.io/inject: "false"
+    sidecarContainers:
+      - name: flagd-ui
+        useDefault:
+          env: true
+        service:
+          port: 4000
+        env:
+          - name: FLAGD_METRICS_EXPORTER
+            value: otel
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: http://$(OTEL_COLLECTOR_NAME):4318
+          - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+            value: 'http://telemetry-otlp-traces.kyma-system:4317'
+          - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+            value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+          - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+            value: 'http://telemetry-otlp-logs.kyma-system:4317'
+          - name: FLAGD_UI_PORT
+            value: "4000"
+          - name: SECRET_KEY_BASE
+            value: yYrECL4qbNwleYInGJYvVnSkwJuSQJ4ijPTx5tirGUXrbznFIBFVJdPl5t6O9ASw
+          - name: PHX_HOST
+            value: localhost
+        resources:
+          requests:
+            memory: 50Mi
+          limits:
+            memory: 250Mi
+        volumeMounts:
+          - name: config-rw
+            mountPath: /app/data
+
+  kafka:
+    enabled: true
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        value: 'http://telemetry-otlp-traces.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        value: 'http://telemetry-otlp-metrics.kyma-system:4317'
+      - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+        value: 'http://telemetry-otlp-logs.kyma-system:4317'
+    resources:
+      limits:
+        memory: 800Mi
+
+  valkey-cart:
+    enabled: true
+    resources:
+      limits:
+        memory: 200Mi

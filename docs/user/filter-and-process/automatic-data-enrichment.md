@@ -1,0 +1,80 @@
+# Automatic Data Enrichment
+
+The Telemetry gateways automatically enrich your data with OTel resource attributes, so you can easily identify the source of the data in your backend.
+
+> [!TIP]
+> For custom enrichment, such as adding your own business-specific attributes, see [Transform and Filter with OTTL](./ottl-transform-and-filter/README.md).
+
+## Service Attributes
+
+The service name is the logical name of the service that emits the telemetry data. The gateway ensures that this attribute always has a valid value.
+
+If you don't provide a service name, or if its value follows the pattern `unknown_service:<process.executable.name>` as described in the [specification](https://opentelemetry.io/docs/specs/semconv/resource/#service), the gateway generates it from Kubernetes metadata.
+
+The gateway determines the service name based on the following hierarchy of labels and names:
+
+1. `app.kubernetes.io/name`: Pod label value
+2. `app`: Pod label value
+3. Deployment/DaemonSet/StatefulSet/Job name
+4. Pod name
+5. If none of the above is available, the value is `unknown_service`
+
+> [!TIP]
+> The Telemetry module also supports enrichment with service attributes matching OTel conventions (see [OTel: Service Attributes](https://opentelemetry.io/docs/specs/semconv/non-normative/k8s-attributes/#service-attributes)), which enriches `service.namespace`, `service.name`, `service.version`, and `service.instance.id`.
+> 
+> If you'd like to use that, manually set the `telemetry.kyma-project.io/service-enrichment` annotation in the Telemetry CR to `otel`. If you want to return to the previous method, set the annotation back to `kyma-legacy`.
+>
+> However, if you choose to use the OTel enrichment strategy, be aware of [these OTel-specific edge case limitations](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/k8sattributesprocessor/README.md#configuring-recommended-resource-attributes).
+
+
+## Kubernetes Metadata
+
+`k8s.*` attributes encapsulate various pieces of Kubernetes metadata associated with the Pod, such as:
+
+- `k8s.pod.name`: The Kubernetes Pod name of the Pod that emitted the data.
+- `k8s.pod.uid`: The Kubernetes Pod ID of the Pod that emitted the data.
+- `k8s.<workload kind>.name`: The Kubernetes workload name to which the emitting Pod belongs. Workload is either Deployment, DaemonSet, StatefulSet, Job, or CronJob.
+- `k8s.namespace.name`: The Kubernetes namespace name with which the emitting Pod is associated.
+- `k8s.cluster.name`: A logical identifier of the cluster, which, by default, is the API Server URL. To set a custom name, configure the `enrichments.cluster.name` field in the Telemetry CRD.
+- `k8s.cluster.uid`: A unique identifier of the cluster, realized by the UID of the `kube-system` namespace.
+- `k8s.node.name`: The Kubernetes Node name to which the emitting Pod is scheduled.
+- `k8s.node.uid`: The Kubernetes Node ID to which the emitting Pod belongs.
+
+## Pod Label Attributes
+
+In the [Telemetry CRD](https://kyma-project.io/#/telemetry-manager/user/resources/01-telemetry), you can also specify your own enrichments of telemetry data based on Pod labels.
+
+To capture custom application metadata (for example, for filtering, grouping, or correlation), configure specific label keys or label key prefixes to include in the enrichment process. The gateway adds all matching Pod labels to the telemetry data as resource attributes, using the label key format `k8s.pod.label.<label_key>`.
+
+The following example configuration enriches the telemetry data with Pod labels that match the specified keys or key prefixes:
+
+- `k8s.pod.label.app.kubernetes.io/name`: The value of the exact label key `app.kubernetes.io/name` from the Pod.
+- `k8s.pod.label.app.kubernetes.io.*`: All labels that start with the prefix `app.kubernetes.io` from the Pod, where `*` is replaced by the actual label key.
+
+```yaml
+apiVersion: operator.kyma-project.io/v1beta1
+kind: Telemetry
+metadata:
+  name: default
+  namespace: kyma-system
+spec:
+  enrichments:
+    extractPodLabels:
+    - key: "<myExactLabelKey>" # for example, "app.kubernetes.io/name"
+    - keyPrefix: "<myLabelPrefix>" # for example, "app.kubernetes.io"
+```
+
+## Cloud Provider Attributes
+
+If data is available, the gateway automatically adds [cloud provider](https://opentelemetry.io/docs/specs/semconv/resource/cloud/) attributes to the telemetry data:
+
+- `cloud.provider`: Cloud provider name
+- `cloud.region`: Region where the Node runs (from Node label `topology.kubernetes.io/region`)
+- `cloud.availability_zone`: Zone where the Node runs (from Node label `topology.kubernetes.io/zone`)
+
+## Host Attributes
+
+If data is available, the gateway automatically adds [host](https://opentelemetry.io/docs/specs/semconv/resource/host/) attributes to the telemetry data:
+
+- `host.type`: Machine type of the Node (from Node label `node.kubernetes.io/instance-type`)
+- `host.arch`: CPU architecture of the system the Node runs on (from Node label `kubernetes.io/arch`)

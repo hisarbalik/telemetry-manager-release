@@ -1,0 +1,44 @@
+name: PR Docu Checks
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - "main"
+      - "release-*"
+    paths-ignore:
+      - "dependencies/**"
+      - "OWNERS"
+      - "CODEOWNERS"
+      - "external-images.yaml"
+  workflow_dispatch:
+
+jobs:
+  verify-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Golang
+        uses: "./.github/template/setup-golang"
+
+      - name: Verify manifests
+        run: make crd-docs-gen manifests-experimental check-clean
+
+  markdown-link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "24.x"
+      - name: Install markdown link checker
+        run: npm install -g md-check-link
+      - name: Verify links
+        run: |
+          md-check-link -q -n 8 -c https://raw.githubusercontent.com/kyma-project/md-check-link/main/.mlc.config.json ./

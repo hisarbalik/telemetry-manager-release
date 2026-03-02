@@ -1,0 +1,20 @@
+* @kyma-project/observability
+
+# All files and subdirectories in /docs
+/docs/ @kyma-project/technical-writers
+/docs/user/integration/sample-app @kyma-project/observability
+
+
+# All .md files
+*.md @kyma-project/technical-writers
+
+# provide a more specific rule for the /.github directory, to remove @kyma-project/technical-writers ownership
+/.github/**/*.md @kyma-project/observability
+
+# JSON, NDJSON files
+*.ndjson @kyma-project/observability
+*.json @kyma-project/observability
+
+# Config files for markdownlint
+.markdownlint.yaml @kyma-project/technical-writers
+markdown_heading_capitalization.js @kyma-project/technical-writers

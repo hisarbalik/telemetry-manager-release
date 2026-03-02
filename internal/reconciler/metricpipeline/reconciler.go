@@ -1,0 +1,535 @@
+package metricpipeline
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	operatorv1beta1 "github.com/kyma-project/telemetry-manager/apis/operator/v1beta1"
+	telemetryv1beta1 "github.com/kyma-project/telemetry-manager/apis/telemetry/v1beta1"
+	"github.com/kyma-project/telemetry-manager/internal/config"
+	"github.com/kyma-project/telemetry-manager/internal/errortypes"
+	"github.com/kyma-project/telemetry-manager/internal/metrics"
+	"github.com/kyma-project/telemetry-manager/internal/otelcollector/config/common"
+	"github.com/kyma-project/telemetry-manager/internal/otelcollector/config/metricagent"
+	"github.com/kyma-project/telemetry-manager/internal/otelcollector/config/metricgateway"
+	"github.com/kyma-project/telemetry-manager/internal/reconciler/commonstatus"
+	"github.com/kyma-project/telemetry-manager/internal/resourcelock"
+	"github.com/kyma-project/telemetry-manager/internal/resources/otelcollector"
+	k8sutils "github.com/kyma-project/telemetry-manager/internal/utils/k8s"
+	metricpipelineutils "github.com/kyma-project/telemetry-manager/internal/utils/metricpipeline"
+	sharedtypesutils "github.com/kyma-project/telemetry-manager/internal/utils/sharedtypes"
+	telemetryutils "github.com/kyma-project/telemetry-manager/internal/utils/telemetry"
+	"github.com/kyma-project/telemetry-manager/internal/validators/secretref"
+	"github.com/kyma-project/telemetry-manager/internal/validators/tlscert"
+)
+
+// defaultReplicaCount is the default number of metric gateway replicas when no custom scaling configuration is provided.
+const defaultReplicaCount int32 = 2
+
+type Reconciler struct {
+	client.Client
+
+	globals config.Global
+
+	agentApplierDeleter     AgentApplierDeleter
+	agentConfigBuilder      AgentConfigBuilder
+	agentProber             commonstatus.Prober
+	gatewayFlowHealthProber GatewayFlowHealthProber
+	agentFlowHealthProber   AgentFlowHealthProber
+	gatewayApplierDeleter   GatewayApplierDeleter
+	gatewayConfigBuilder    GatewayConfigBuilder
+	gatewayProber           commonstatus.Prober
+	istioStatusChecker      IstioStatusChecker
+	overridesHandler        OverridesHandler
+	pipelineLock            PipelineLock
+	pipelineSync            PipelineSyncer
+	pipelineValidator       *Validator
+	errToMsgConverter       commonstatus.ErrorToMessageConverter
+	secretWatcher           SecretWatcher
+}
+
+// Option is a functional option for configuring a Reconciler.
+type Option func(*Reconciler)
+
+// WithGlobals sets the global configuration.
+func WithGlobals(globals config.Global) Option {
+	return func(r *Reconciler) {
+		r.globals = globals
+	}
+}
+
+// WithAgentApplierDeleter sets the agent applier/deleter.
+func WithAgentApplierDeleter(applierDeleter AgentApplierDeleter) Option {
+	return func(r *Reconciler) {
+		r.agentApplierDeleter = applierDeleter
+	}
+}
+
+// WithAgentConfigBuilder sets the agent config builder.
+func WithAgentConfigBuilder(builder AgentConfigBuilder) Option {
+	return func(r *Reconciler) {
+		r.agentConfigBuilder = builder
+	}
+}
+
+// WithAgentProber sets the agent prober.
+func WithAgentProber(prober commonstatus.Prober) Option {
+	return func(r *Reconciler) {
+		r.agentProber = prober
+	}
+}
+
+// WithGatewayFlowHealthProber sets the gateway flow health prober.
+func WithGatewayFlowHealthProber(prober GatewayFlowHealthProber) Option {
+	return func(r *Reconciler) {
+		r.gatewayFlowHealthProber = prober
+	}
+}
+
+// WithAgentFlowHealthProber sets the agent flow health prober.
+func WithAgentFlowHealthProber(prober AgentFlowHealthProber) Option {
+	return func(r *Reconciler) {
+		r.agentFlowHealthProber = prober
+	}
+}
+
+// WithGatewayApplierDeleter sets the gateway applier/deleter.
+func WithGatewayApplierDeleter(applierDeleter GatewayApplierDeleter) Option {
+	return func(r *Reconciler) {
+		r.gatewayApplierDeleter = applierDeleter
+	}
+}
+
+// WithGatewayConfigBuilder sets the gateway config builder.
+func WithGatewayConfigBuilder(builder GatewayConfigBuilder) Option {
+	return func(r *Reconciler) {
+		r.gatewayConfigBuilder = builder
+	}
+}
+
+// WithGatewayProber sets the gateway prober.
+func WithGatewayProber(prober commonstatus.Prober) Option {
+	return func(r *Reconciler) {
+		r.gatewayProber = prober
+	}
+}
+
+// WithIstioStatusChecker sets the Istio status checker.
+func WithIstioStatusChecker(checker IstioStatusChecker) Option {
+	return func(r *Reconciler) {
+		r.istioStatusChecker = checker
+	}
+}
+
+// WithOverridesHandler sets the overrides handler.
+func WithOverridesHandler(handler OverridesHandler) Option {
+	return func(r *Reconciler) {
+		r.overridesHandler = handler
+	}
+}
+
+// WithPipelineLock sets the pipeline lock.
+func WithPipelineLock(lock PipelineLock) Option {
+	return func(r *Reconciler) {
+		r.pipelineLock = lock
+	}
+}
+
+// WithPipelineSyncer sets the pipeline syncer.
+func WithPipelineSyncer(syncer PipelineSyncer) Option {
+	return func(r *Reconciler) {
+		r.pipelineSync = syncer
+	}
+}
+
+// WithPipelineValidator sets the pipeline validator.
+func WithPipelineValidator(validator *Validator) Option {
+	return func(r *Reconciler) {
+		r.pipelineValidator = validator
+	}
+}
+
+// WithErrorToMessageConverter sets the error to message converter.
+func WithErrorToMessageConverter(converter commonstatus.ErrorToMessageConverter) Option {
+	return func(r *Reconciler) {
+		r.errToMsgConverter = converter
+	}
+}
+
+// WithClient sets the Kubernetes client.
+func WithClient(client client.Client) Option {
+	return func(r *Reconciler) {
+		r.Client = client
+	}
+}
+
+// WithSecretWatcher sets the secret watcher.
+func WithSecretWatcher(watcher SecretWatcher) Option {
+	return func(r *Reconciler) {
+		r.secretWatcher = watcher
+	}
+}
+
+// New creates a new Reconciler with the provided client and functional options.
+// All dependencies must be provided via functional options.
+func New(opts ...Option) *Reconciler {
+	r := &Reconciler{}
+
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	return r
+}
+
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logf.FromContext(ctx).V(1).Info("Reconciling")
+
+	overrideConfig, err := r.overridesHandler.LoadOverrides(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if overrideConfig.Metrics.Paused {
+		logf.FromContext(ctx).V(1).Info("Skipping reconciliation: paused using override config")
+		return ctrl.Result{}, nil
+	}
+
+	var metricPipeline telemetryv1beta1.MetricPipeline
+	if err := r.Get(ctx, req.NamespacedName, &metricPipeline); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if err := r.syncWatchedSecrets(ctx, &metricPipeline); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.pipelineSync.TryAcquireLock(ctx, &metricPipeline); err != nil {
+		if errors.Is(err, resourcelock.ErrMaxPipelinesExceeded) {
+			logf.FromContext(ctx).V(1).Error(err, "Could not register pipeline")
+			return ctrl.Result{}, nil
+		}
+
+		return ctrl.Result{}, err
+	}
+
+	err = r.doReconcile(ctx, &metricPipeline)
+	if statusErr := r.updateStatus(ctx, metricPipeline.Name); statusErr != nil {
+		if err != nil {
+			err = fmt.Errorf("failed while updating status: %w: %w", statusErr, err)
+		} else {
+			err = fmt.Errorf("failed to update status: %w", statusErr)
+		}
+	}
+
+	return ctrl.Result{}, err
+}
+
+func (r *Reconciler) doReconcile(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline) error {
+	if err := r.pipelineLock.TryAcquireLock(ctx, pipeline); err != nil {
+		if errors.Is(err, resourcelock.ErrMaxPipelinesExceeded) {
+			logf.FromContext(ctx).V(1).Info("Skipping reconciliation: maximum pipeline count limit exceeded")
+			return nil
+		}
+
+		return err
+	}
+
+	var allPipelinesList telemetryv1beta1.MetricPipelineList
+	if err := r.List(ctx, &allPipelinesList); err != nil {
+		return fmt.Errorf("failed to list metric pipelines: %w", err)
+	}
+
+	r.trackPipelineInfoMetric(ctx, allPipelinesList.Items)
+
+	reconcilablePipelines, err := r.getReconcilablePipelines(ctx, allPipelinesList.Items)
+	if err != nil {
+		return fmt.Errorf("failed to fetch deployable metric pipelines: %w", err)
+	}
+
+	var reconcilablePipelinesRequiringAgents = r.getPipelinesRequiringAgents(reconcilablePipelines)
+
+	if len(reconcilablePipelinesRequiringAgents) == 0 {
+		logf.FromContext(ctx).V(1).Info("cleaning up metric agent resources: no metric pipelines require an agent")
+
+		if err = r.agentApplierDeleter.DeleteResources(ctx, r.Client); err != nil {
+			return fmt.Errorf("failed to delete agent resources: %w", err)
+		}
+	}
+
+	if len(reconcilablePipelines) == 0 {
+		logf.FromContext(ctx).V(1).Info("cleaning up metric pipeline resources: all metric pipelines are non-reconcilable")
+
+		if err = r.gatewayApplierDeleter.DeleteResources(ctx, r.Client, r.istioStatusChecker.IsIstioActive(ctx)); err != nil {
+			return fmt.Errorf("failed to delete gateway resources: %w", err)
+		}
+
+		return nil
+	}
+
+	if err = r.reconcileMetricGateway(ctx, pipeline, reconcilablePipelines); err != nil {
+		return fmt.Errorf("failed to reconcile metric gateway: %w", err)
+	}
+
+	if len(reconcilablePipelinesRequiringAgents) > 0 {
+		if err = r.reconcileMetricAgents(ctx, pipeline, reconcilablePipelinesRequiringAgents); err != nil {
+			return fmt.Errorf("failed to reconcile metric agents: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// getReconcilablePipelines returns the list of metric pipelines that are ready to be rendered into the otel collector configuration. A pipeline is deployable if it is not being deleted, all secret references exist, and is not above the pipeline limit.
+func (r *Reconciler) getReconcilablePipelines(ctx context.Context, allPipelines []telemetryv1beta1.MetricPipeline) ([]telemetryv1beta1.MetricPipeline, error) {
+	var reconcilablePipelines []telemetryv1beta1.MetricPipeline
+
+	for i := range allPipelines {
+		isReconcilable, err := r.isReconcilable(ctx, &allPipelines[i])
+		if err != nil {
+			return nil, err
+		}
+
+		if isReconcilable {
+			reconcilablePipelines = append(reconcilablePipelines, allPipelines[i])
+		}
+	}
+
+	return reconcilablePipelines, nil
+}
+
+func (r *Reconciler) isReconcilable(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline) (bool, error) {
+	if !pipeline.GetDeletionTimestamp().IsZero() {
+		return false, nil
+	}
+
+	err := r.pipelineValidator.validate(ctx, pipeline)
+
+	// Pipeline with a certificate that is about to expire is still considered reconcilable
+	if err == nil || tlscert.IsCertAboutToExpireError(err) {
+		return true, nil
+	}
+
+	// Remaining errors imply that the pipeline is not reconcilable
+	// In case that one of the requests to the Kubernetes API server failed, then the pipeline is also considered non-reconcilable and the error is returned to trigger a requeue
+	var APIRequestFailed *errortypes.APIRequestFailedError
+	if errors.As(err, &APIRequestFailed) {
+		return false, APIRequestFailed.Err
+	}
+
+	return false, nil
+}
+
+func (r *Reconciler) getPipelinesRequiringAgents(allPipelines []telemetryv1beta1.MetricPipeline) []telemetryv1beta1.MetricPipeline {
+	var pipelinesRequiringAgents []telemetryv1beta1.MetricPipeline
+
+	for i := range allPipelines {
+		if isMetricAgentRequired(&allPipelines[i]) {
+			pipelinesRequiringAgents = append(pipelinesRequiringAgents, allPipelines[i])
+		}
+	}
+
+	return pipelinesRequiringAgents
+}
+
+func isMetricAgentRequired(pipeline *telemetryv1beta1.MetricPipeline) bool {
+	input := pipeline.Spec.Input
+
+	return metricpipelineutils.IsRuntimeInputEnabled(input) || metricpipelineutils.IsPrometheusInputEnabled(input) || metricpipelineutils.IsIstioInputEnabled(input)
+}
+
+func (r *Reconciler) reconcileMetricGateway(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline, allPipelines []telemetryv1beta1.MetricPipeline) error {
+	shootInfo := k8sutils.GetGardenerShootInfo(ctx, r.Client)
+	telemetryOptions := telemetryutils.Options{
+		SignalType:                common.SignalTypeMetric,
+		Client:                    r.Client,
+		DefaultReplicas:           defaultReplicaCount,
+		DefaultTelemetryNamespace: r.globals.DefaultTelemetryNamespace(),
+	}
+	clusterName := telemetryutils.GetClusterNameFromTelemetry(ctx, telemetryOptions)
+
+	clusterUID, err := k8sutils.GetClusterUID(ctx, r.Client)
+	if err != nil {
+		return fmt.Errorf("failed to get kube-system namespace for cluster UID: %w", err)
+	}
+
+	var enrichments *operatorv1beta1.EnrichmentSpec
+
+	t, err := telemetryutils.GetDefaultTelemetryInstance(ctx, r.Client, r.globals.DefaultTelemetryNamespace())
+	if err == nil {
+		enrichments = t.Spec.Enrichments
+	}
+
+	collectorConfig, collectorEnvVars, err := r.gatewayConfigBuilder.Build(ctx, allPipelines, metricgateway.BuildOptions{
+		GatewayNamespace:            r.globals.TargetNamespace(),
+		InstrumentationScopeVersion: r.globals.Version(),
+		Cluster: common.ClusterOptions{
+			ClusterName:   clusterName,
+			ClusterUID:    clusterUID,
+			CloudProvider: shootInfo.CloudProvider,
+		},
+		Enrichments:       enrichments,
+		ServiceEnrichment: telemetryutils.GetServiceEnrichmentFromTelemetryOrDefault(ctx, telemetryOptions),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create collector config: %w", err)
+	}
+
+	collectorConfigYAML, err := yaml.Marshal(collectorConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collector config: %w", err)
+	}
+
+	isIstioActive := r.istioStatusChecker.IsIstioActive(ctx)
+
+	opts := otelcollector.GatewayApplyOptions{
+		CollectorConfigYAML:            string(collectorConfigYAML),
+		CollectorEnvVars:               collectorEnvVars,
+		IstioEnabled:                   isIstioActive,
+		Replicas:                       telemetryutils.GetReplicaCountFromTelemetry(ctx, telemetryOptions),
+		ResourceRequirementsMultiplier: len(allPipelines),
+	}
+
+	if err := r.gatewayApplierDeleter.ApplyResources(
+		ctx,
+		k8sutils.NewOwnerReferenceSetter(r.Client, pipeline),
+		opts,
+	); err != nil {
+		return fmt.Errorf("failed to apply gateway resources: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) reconcileMetricAgents(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline, allPipelines []telemetryv1beta1.MetricPipeline) error {
+	isIstioActive := r.istioStatusChecker.IsIstioActive(ctx)
+	shootInfo := k8sutils.GetGardenerShootInfo(ctx, r.Client)
+	telemetryOptions := telemetryutils.Options{
+		SignalType:                common.SignalTypeMetric,
+		Client:                    r.Client,
+		DefaultReplicas:           defaultReplicaCount,
+		DefaultTelemetryNamespace: r.globals.DefaultTelemetryNamespace(),
+	}
+	clusterName := telemetryutils.GetClusterNameFromTelemetry(ctx, telemetryOptions)
+
+	clusterUID, err := k8sutils.GetClusterUID(ctx, r.Client)
+	if err != nil {
+		return fmt.Errorf("failed to get kube-system namespace for cluster UID: %w", err)
+	}
+
+	var enrichments *operatorv1beta1.EnrichmentSpec
+
+	t, err := telemetryutils.GetDefaultTelemetryInstance(ctx, r.Client, r.globals.DefaultTelemetryNamespace())
+	if err == nil {
+		enrichments = t.Spec.Enrichments
+	}
+
+	agentConfig, collectorEnvVars, err := r.agentConfigBuilder.Build(ctx, allPipelines, metricagent.BuildOptions{
+		IstioActive:                 isIstioActive,
+		IstioCertPath:               otelcollector.IstioCertPath,
+		InstrumentationScopeVersion: r.globals.Version(),
+		AgentNamespace:              r.globals.TargetNamespace(),
+		Cluster: common.ClusterOptions{
+			ClusterName:   clusterName,
+			ClusterUID:    clusterUID,
+			CloudProvider: shootInfo.CloudProvider,
+		},
+		Enrichments:       enrichments,
+		ServiceEnrichment: telemetryutils.GetServiceEnrichmentFromTelemetryOrDefault(ctx, telemetryOptions),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create collector config: %w", err)
+	}
+
+	agentConfigYAML, err := yaml.Marshal(agentConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collector config: %w", err)
+	}
+
+	backendPorts, err := metricpipelineutils.OTLPOutputPorts(ctx, r.Client, allPipelines)
+	if err != nil {
+		return fmt.Errorf("failed to get ports of the backends: %w", err)
+	}
+
+	if err := r.agentApplierDeleter.ApplyResources(
+		ctx,
+		k8sutils.NewOwnerReferenceSetter(r.Client, pipeline),
+		otelcollector.AgentApplyOptions{
+			IstioEnabled:        isIstioActive,
+			CollectorConfigYAML: string(agentConfigYAML),
+			CollectorEnvVars:    collectorEnvVars,
+			BackendPorts:        backendPorts,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to apply agent resources: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) trackPipelineInfoMetric(ctx context.Context, pipelines []telemetryv1beta1.MetricPipeline) {
+	for i := range pipelines {
+		pipeline := &pipelines[i]
+
+		var features []string
+
+		// General features
+		if sharedtypesutils.IsOTLPInputEnabled(pipeline.Spec.Input.OTLP) {
+			features = append(features, metrics.FeatureInputOTLP)
+		}
+
+		if sharedtypesutils.IsTransformDefined(pipeline.Spec.Transforms) {
+			features = append(features, metrics.FeatureTransform)
+		}
+
+		if sharedtypesutils.IsFilterDefined(pipeline.Spec.Filters) {
+			features = append(features, metrics.FeatureFilter)
+		}
+
+		// MetricPipeline features
+
+		if metricpipelineutils.IsRuntimeInputEnabled(pipeline.Spec.Input) {
+			features = append(features, metrics.FeatureInputRuntime)
+		}
+
+		if metricpipelineutils.IsPrometheusInputEnabled(pipeline.Spec.Input) {
+			features = append(features, metrics.FeatureInputPrometheus)
+		}
+
+		if metricpipelineutils.IsIstioInputEnabled(pipeline.Spec.Input) {
+			features = append(features, metrics.FeatureInputIstio)
+		}
+
+		// Get endpoint
+		endpoint := r.getEndpoint(ctx, pipeline)
+
+		// Record info metric
+		metrics.RecordMetricPipelineInfo(pipeline.Name, endpoint, features...)
+	}
+}
+
+func (r *Reconciler) getEndpoint(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline) string {
+	if pipeline.Spec.Output.OTLP == nil {
+		return ""
+	}
+
+	endpointBytes, err := sharedtypesutils.ResolveValue(ctx, r.Client, pipeline.Spec.Output.OTLP.Endpoint)
+	if err != nil {
+		return ""
+	}
+
+	return string(endpointBytes)
+}
+
+func (r *Reconciler) syncWatchedSecrets(ctx context.Context, pipeline *telemetryv1beta1.MetricPipeline) error {
+	refs := secretref.GetSecretRefsMetricPipeline(pipeline)
+	secrets := secretref.RefsToSecretNames(refs)
+
+	return r.secretWatcher.SyncWatchedSecrets(ctx, pipeline, secrets)
+}

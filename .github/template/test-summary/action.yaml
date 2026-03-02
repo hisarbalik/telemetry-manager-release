@@ -1,0 +1,54 @@
+name: Test Summary
+description: Downloads test artifacts and publishes consolidated test reports
+
+inputs:
+  reports-path:
+    description: Path where reports will be downloaded
+    required: false
+    default: "reports"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install xmlstartar
+      shell: bash
+      run: |
+        if ! command -v xmlstarlet &> /dev/null; then
+          echo "Installing xmlstarlet..."
+          sudo apt-get update -qq
+          sudo apt-get install -y xmlstarlet
+        else
+          echo "xmlstarlet is already installed"
+        fi
+
+    - name: Download test reports
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      with:
+        path: "${{ inputs.reports-path }}"
+        pattern: "*-report"
+        merge-multiple: true
+
+    - name: Cleanup test reports
+      shell: bash
+      run: |
+        for xml_file in ${{ inputs.reports-path }}/*.xml; do
+          if [ -f "$xml_file" ]; then
+            echo "Processing: $xml_file"
+            xmlstarlet ed -L --delete "//testcase[starts-with(@time, '0.0')]" "$xml_file"
+            echo "✓ Removed zero-time testcases from: $xml_file"
+          fi
+        done
+
+    - name: Publish test reports to GitHub summary
+      uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
+      if: always()
+      with:
+        report_paths: "${{ inputs.reports-path }}/junit-report*.xml"
+        summary: true
+        detailed_summary: true
+        fail_on_failure: true
+        include_passed: true
+        skip_annotations: true
+        group_suite: true
+        include_empty_in_summary: false
+        include_time_in_summary: true

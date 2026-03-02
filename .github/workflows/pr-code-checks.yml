@@ -1,0 +1,82 @@
+name: PR Code Checks
+
+permissions:
+  contents: read
+
+on:
+  merge_group:
+  pull_request:
+    branches:
+      - "main"
+      - "release-*"
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "OWNERS"
+      - "CODEOWNERS"
+      - "external-images.yaml"
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Golang
+        uses: "./.github/template/setup-golang"
+
+      - name: Run tests
+        run: make test
+
+      - name: Run tests sample-app
+        working-directory: dependencies/sample-app
+        run: make test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Golang
+        uses: "./.github/template/setup-golang"
+
+      - name: Run lint
+        run: make --debug lint
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Golang
+        uses: "./.github/template/setup-golang"
+
+      - name: Run coverage check
+        run: make check-coverage
+
+  verify-code-generated:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Golang
+        uses: "./.github/template/setup-golang"
+
+      - name: Verify all code and manifests were generated and committed
+        run: make check-clean
+
+  test-renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Test Renovate config
+        uses: renovatebot/github-action@8d75b92f43899d483728e9a8a7fd44238020f6e6 # v46.1.2
+        with:
+          configurationFile: renovate.json
+          token: ${{ secrets.GITHUB_TOKEN }}
