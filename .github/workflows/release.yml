@@ -173,10 +173,13 @@ jobs:
       - name: Create and push release tag
         env:
           VERSION: ${{ github.event.inputs.version }}
+          RELEASE_BRANCH: ${{ needs.validate-and-prepare.outputs.release-branch }}
         run: |
           echo "Creating release tag ${VERSION}..."
-          git tag -a "${VERSION}" -m "Release ${VERSION}"
-          git push origin "${VERSION}"
+          git fetch upstream
+          git rebase upstream/{RELEASE_BRANCH} {RELEASE_BRANCH}
+          git tag "${VERSION}"
+          git push upstream "${VERSION}"
           echo "Created and pushed tag ${VERSION}"
           echo "Tag ${VERSION} pushed. This will trigger tag-release.yml workflow."
 
