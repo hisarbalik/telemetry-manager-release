@@ -124,7 +124,14 @@ jobs:
         env:
           VERSION: ${{ github.event.inputs.version }}
           OCC_IMAGE: ${{ github.event.inputs.occ_image }}
+          RELEASE_BRANCH: ${{ needs.validate-and-prepare.outputs.release-branch }}
         run: |
+          echo "Working on release branch ${RELEASE_BRANCH}..."                                                                                                                                                                                                                                         
+          
+          # Ensure we're on the correct branch                                                                                                                                                                                                                                                          
+          git checkout "${RELEASE_BRANCH}"
+          git pull origin "${RELEASE_BRANCH}"
+          
           echo "Bumping version to ${VERSION}..."
 
           # Update .env file with release version and OCC image
@@ -138,7 +145,7 @@ jobs:
             echo "Updated ENV_MANAGER_IMAGE tag in .env"
 
             # Update ENV_OTEL_COLLECTOR_IMAGE tag to OCC image version
-            sed -i.bak "s|ENV_OTEL_COLLECTOR_IMAGE=\(.*\):.*|ENV_OTEL_COLLECTOR_IMAGE=\1:${OCC_IMAGE}|" .env && rm .env.bak
+            sed -i.bak "s|ENV_OTEL_COLLECTOR_IMAGE=\(.*\):.*|ENV_OTEL_COLLECTOR_IMAGE=\1:${OCC_IMAGE}\"|" .env && rm .env.bak
             echo "Updated ENV_OTEL_COLLECTOR_IMAGE tag in .env"
 
             # Run make generate to update generated files
