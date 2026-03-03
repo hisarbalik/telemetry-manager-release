@@ -175,61 +175,70 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
           RELEASE_BRANCH: ${{ needs.validate-and-prepare.outputs.release-branch }}
         run: |
-          echo "Creating release tag ${VERSION}..."
-          git fetch upstream
-          git rebase upstream/{RELEASE_BRANCH} {RELEASE_BRANCH}
-          git tag "${VERSION}"
-          git push upstream "${VERSION}"
-          echo "Created and pushed tag ${VERSION}"
+          echo "Creating release tag ${VERSION} on release branch ${RELEASE_BRANCH}..."
+
+          # Ensure we have the latest changes from the release branch
+          git fetch origin "${RELEASE_BRANCH}"
+          git checkout "${RELEASE_BRANCH}"
+          git pull origin "${RELEASE_BRANCH}"
+
+          # Create and push the tag from the release branch
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+
+          echo "Created and pushed tag ${VERSION} from ${RELEASE_BRANCH}"
           echo "Tag ${VERSION} pushed. This will trigger tag-release.yml workflow."
 
-      - name: Wait for tag-release workflow to complete
+  release:
+    needs: prepare-release  # wait for prepare-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      KYMA_TELEMETRY_MANAGER_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.release-tag }}
+          fetch-depth: 0
+
+      - name: Wait for image to be available in registry
+        run: "./hack/await_image.sh"
+        env:
+          IMAGE_REPO: "europe-docker.pkg.dev/kyma-project/prod/telemetry-manager"
+          IMAGE_TAG: "${{ needs.prepare-release.outputs.release-tag }}"
+          QUERY_INTERVAL: 30
+
+      - name: Install tools
+        shell: bash
+        run: make install-tools
+
+      - name: Release
+        run: hack/release.sh ${{ needs.prepare-release.outputs.release-tag }}
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GORELEASER_CURRENT_TAG: "${{ needs.prepare-release.outputs.release-tag }}"
+
+      - name: Package Helm chart
+        run: |
+          OUTPUT=$(helm package ./helm -d ./)
+          FILENAME=$(echo $OUTPUT | grep -o '[^ ]*.tgz')
+          echo "HELM_CHART=$FILENAME" >> $GITHUB_ENV
+
+      - name: Upload Helm chart to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.event.inputs.version }}
-        timeout-minutes: 60
         run: |
-          echo "Waiting for tag-release.yml workflow to be triggered by tag ${VERSION}..."
-          sleep 30 # Give GitHub time to trigger the workflow
+          [[ ! -e ${HELM_CHART} ]] && echo "::error ::Packaged Helm chart does not exist" && exit 1
+          gh release upload ${{ needs.prepare-release.outputs.release-tag }} --clobber ${HELM_CHART}
 
-          # Find the workflow run triggered by the tag push
-          MAX_ATTEMPTS=20
-          ATTEMPT=0
-
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            WORKFLOW_ID=$(gh run list \
-              --workflow=tag-release.yml \
-              --json databaseId,headSha,event,status \
-              --jq ".[] | select(.event == \"push\") | .databaseId" \
-              | head -1)
-
-            if [ -n "$WORKFLOW_ID" ]; then
-              echo "Found tag-release workflow run: ${WORKFLOW_ID}"
-              break
-            fi
-
-            echo "Attempt $((ATTEMPT + 1))/${MAX_ATTEMPTS}: Waiting for workflow to start..."
-            sleep 10
-            ATTEMPT=$((ATTEMPT + 1))
-          done
-
-          if [ -z "$WORKFLOW_ID" ]; then
-            echo "::error ::tag-release.yml workflow not found after ${MAX_ATTEMPTS} attempts"
-            exit 1
-          fi
-
-          # Watch the workflow
-          echo "Watching tag-release workflow ${WORKFLOW_ID}..."
-          gh run watch "${WORKFLOW_ID}" --exit-status
-
-      - name: Get release URL
-        id: get-release-url
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.event.inputs.version }}
+      - name: Commit and push Helm chart metadata
         run: |
-          RELEASE_URL=$(gh release view "${VERSION}" --json url --jq .url)
-          echo "url=${RELEASE_URL}" >> $GITHUB_OUTPUT
-          echo "Release URL: ${RELEASE_URL}"
-
-
+          git config --global user.name "${GITHUB_ACTOR}"
+          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git checkout gh-pages
+          helm repo index --url https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.release-tag }} --merge ./index.yaml ./
+          git add index.yaml
+          git commit -m "Update Helm chart metadata for ${{ needs.prepare-release.outputs.release-tag }}"
+          git push origin gh-pages
