@@ -14,7 +14,7 @@ on:
       dry_run:
         description: 'Perform a dry run without creating a release'
         required: false
-        default: 'false'
+        default: false
         type: boolean
       force:
         description: 'Force release creation (re-create existing release, skip validation checks)'
@@ -255,7 +255,7 @@ jobs:
           RELEASE_BRANCH: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
           OCC_IMAGE: ${{ github.event.inputs.occ_image }}
         run: |
-          PR_BODY="$(cat <<'EOF'
+          PR_BODY="$(cat <<EOF
           ## Release Preparation for ${VERSION}
 
           This PR prepares the release branch for version **${VERSION}**.
@@ -297,7 +297,7 @@ jobs:
           PR_NUMBER="${{ steps.create-pr.outputs.pr-number }}"
           echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 60 minutes)..."
 
-          MAX_ATTEMPTS=360  # 60 minutes with 10-second intervals
+          MAX_ATTEMPTS=60  # 60 minutes with 60-second intervals
           ATTEMPT=0
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
@@ -305,7 +305,13 @@ jobs:
             PR_STATE=$(gh pr view "${PR_NUMBER}" --json state --jq .state)
 
             if [ "$PR_STATE" = "MERGED" ]; then
-              echo "✓ PR #${PR_NUMBER} has been merged!"
+              # Verify merged to correct branch
+              MERGED_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName --jq .baseRefName)
+              if [ "$MERGED_BRANCH" != "$RELEASE_BRANCH" ]; then
+                echo "::error::PR was merged to ${MERGED_BRANCH} instead of ${RELEASE_BRANCH}"
+                exit 1
+              fi
+              echo "✓ PR #${PR_NUMBER} has been merged to ${RELEASE_BRANCH}!"
               break
             elif [ "$PR_STATE" = "CLOSED" ]; then
               echo "::error::PR #${PR_NUMBER} was closed without merging"
@@ -313,7 +319,7 @@ jobs:
             fi
 
             echo "Attempt $((ATTEMPT + 1))/${MAX_ATTEMPTS}: PR state is ${PR_STATE}, waiting..."
-            sleep 10
+            sleep 60
             ATTEMPT=$((ATTEMPT + 1))
           done
 
@@ -328,6 +334,24 @@ jobs:
           git checkout "${RELEASE_BRANCH}"
           git pull origin "${RELEASE_BRANCH}"
           echo "✓ Release branch updated with merged changes"
+
+      - name: Clean up bump branch
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          BUMP_BRANCH="release-prep-${VERSION}"
+          echo "Cleaning up bump branch ${BUMP_BRANCH}..."
+
+          # Check if branch exists on remote
+          if git ls-remote --heads origin "${BUMP_BRANCH}" | grep -q "${BUMP_BRANCH}"; then
+            git push origin --delete "${BUMP_BRANCH}"
+            echo "✓ Deleted bump branch ${BUMP_BRANCH}"
+          else
+            echo "Bump branch ${BUMP_BRANCH} not found on remote (may already be deleted)"
+          fi
 
   build-image:
     permissions:
@@ -344,7 +368,9 @@ jobs:
 
   unit-tests:
     runs-on: ubuntu-latest
-    needs: prepare-release
+    needs:
+    - prepare-release
+    - validate-and-prepare-branch
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -409,7 +435,19 @@ jobs:
         with:
           ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
           fetch-depth: 0
-
+      - name: Verify we're on the merged PR commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.prepare-release.outputs.pr-number }}
+        run: |
+          # Get the merge commit SHA
+          MERGE_SHA=$(gh pr view "${PR_NUMBER}" --json mergeCommit --jq .mergeCommit.oid)
+          CURRENT_SHA=$(git rev-parse HEAD)
+          
+          if [ "$MERGE_SHA" != "$CURRENT_SHA" ]; then
+            echo "::warning::Expected commit ${MERGE_SHA} but got ${CURRENT_SHA}"
+            echo "Release branch may have additional commits after PR merge"
+          fi
       - name: Create and push release tag
         if: ${{ github.event.inputs.dry_run != true }}
         env:
@@ -489,36 +527,60 @@ jobs:
         run: |
           echo "::notice::DRY RUN: Skipping gh-pages Helm chart metadata update"
           echo "Would have updated index.yaml on gh-pages branch"
-
+      - name: Release success summary
+        if: ${{ success() && github.event.inputs.dry_run != true }}
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ##  Release ${{ needs.prepare-release.outputs.release-tag }} Published Successfully!
+          
+          ### Release Information
+          - **Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.release-tag }}
+          - **Version**: ${{ needs.prepare-release.outputs.release-tag }}
+          - **Branch**: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+          - **PR**: #${{ needs.prepare-release.outputs.pr-number }}
+          - **OCC Image**: ${{ github.event.inputs.occ_image }}
+          - **Helm Chart**: \`${HELM_CHART}\`
+          
+          ### Docker Images
+          \`\`\`
+          europe-docker.pkg.dev/kyma-project/prod/telemetry-manager:${{ needs.prepare-release.outputs.release-tag }}
+          \`\`\`
+          
+          ### What's Next?
+          1. Verify the release at the URL above
+          2. Announce the release to the team
+          3. Update external documentation if needed
+          
+          EOF
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == true }}
         run: |
           cat >> $GITHUB_STEP_SUMMARY <<EOF
-          ## 🧪 Dry Run Summary
+          ## Dry Run Summary
 
           **Version**: ${{ needs.prepare-release.outputs.release-tag }}
           **Release Branch**: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
           **OCC Image**: ${{ github.event.inputs.occ_image }}
 
-          ### ✅ Completed (Dry Run)
-          - ✅ Version validation
-          - ✅ Milestone verification
-          - ✅ Release branch preparation
-          - ✅ Version bump in .env
-          - ✅ make generate
-          - ✅ Commit to release branch
-          - ✅ Docker image build
-          - ✅ Unit tests
-          - ✅ PR integration tests
-          - ✅ Gardener integration tests
-          - ✅ Release report upload
-          - ✅ Helm chart packaging
+          ### Completed (Dry Run)
+          - Version validation
+          - Milestone verification
+          - Release branch preparation
+          - Version bump in .env
+          - make generate
+          - Commit to release branch
+          - Docker image build
+          - Unit tests
+          - PR integration tests
+          - Gardener integration tests
+          - Release report upload
+          - Helm chart packaging
 
-          ### ⏭️ Skipped (Dry Run)
-          - ⏭️ Git tag creation
-          - ⏭️ GitHub release creation
-          - ⏭️ Helm chart upload to release
-          - ⏭️ gh-pages update
+          ### Skipped (Dry Run)
+          - Git tag creation
+          - GitHub release creation
+          - Helm chart upload to release
+          - gh-pages update
 
           ---
           **To create the actual release**, re-run this workflow with `dry_run` set to `false`.
