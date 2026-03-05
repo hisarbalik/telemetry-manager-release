@@ -1,11 +1,4 @@
 name: Telemetry Release
-run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}"
-
-permissions:
-  contents: write
-  issues: read
-  actions: read
-  pull-requests: read
 
 on:
   workflow_dispatch:
@@ -28,6 +21,13 @@ on:
         required: false
         default: false
         type: boolean
+run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}"
+
+permissions:
+  contents: write
+  issues: read
+  actions: read
+  pull-requests: read
 
 jobs:
   validate-and-prepare-branch:
@@ -287,7 +287,7 @@ jobs:
           PR_NUMBER="${{ steps.create-pr.outputs.pr-number }}"
           echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 60 minutes)..."
 
-          MAX_ATTEMPTS=60  # 60 minutes with 60-second intervals
+          MAX_ATTEMPTS=60 
           ATTEMPT=0
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
@@ -307,7 +307,7 @@ jobs:
             fi
 
             echo "Attempt $((ATTEMPT + 1))/${MAX_ATTEMPTS}: PR state is ${PR_STATE}, waiting..."
-            sleep 60
+            sleep 120
             ATTEMPT=$((ATTEMPT + 1))
           done
 
