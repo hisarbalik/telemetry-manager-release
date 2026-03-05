@@ -1,5 +1,5 @@
 name: Telemetry Release
-run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}"
+run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry ${{ github.event.inputs.version }} with OCC ${{ github.event.inputs.occ_image }}"
 
 permissions:
   contents: write
