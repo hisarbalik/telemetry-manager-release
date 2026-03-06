@@ -369,4 +369,26 @@ jobs:
 
       - name: Run tests
         run: make test
-        
+
+  run-pr-integration:
+    needs:
+      - build-image
+      - prepare-release
+      - validate-and-prepare-branch
+    uses: ./.github/workflows/pr-integration.yml
+    with:
+      image_tag: ${{ needs.prepare-release.outputs.release-tag }}
+      ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+    secrets: inherit
+
+  run-gardener-integration:
+    needs:
+      - build-image
+      - prepare-release
+      - validate-and-prepare-branch
+    uses: ./.github/workflows/gardener-integration.yml
+    with:
+      image_tag: ${{ needs.prepare-release.outputs.release-tag }}
+      ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+    secrets: inherit
+    
