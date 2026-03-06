@@ -21,7 +21,7 @@ on:
         required: false
         default: false
         type: boolean
-run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}"
+run-name: "Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}, dry-run: ${{ github.event.inputs.dry_run }}, force mode: ${{ github.event.inputs.force }}"
 
 permissions:
   contents: write
@@ -270,8 +270,11 @@ jobs:
           PR_URL=$(gh pr create \
             --base "${RELEASE_BRANCH}" \
             --head "${BUMP_BRANCH}" \
-            --title "Release preparation: Bump version to ${VERSION}" \
-            --body "${PR_BODY}")
+            --title "chore: release preparation: Bump version to ${VERSION}" \
+            --body "${PR_BODY}" \
+            --label "area/release" \
+            --label "kind/chore")
+
 
           PR_NUMBER=$(echo "${PR_URL}" | grep -o '[0-9]*$')
           echo "pr-number=${PR_NUMBER}" >> $GITHUB_OUTPUT
@@ -282,10 +285,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BRANCH: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: |
           PR_NUMBER="${{ steps.create-pr.outputs.pr-number }}"
-          echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 60 minutes)..."
+          echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 120 minutes)..."
 
           MAX_ATTEMPTS=60 
           ATTEMPT=0
