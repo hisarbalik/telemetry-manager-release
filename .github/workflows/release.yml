@@ -397,8 +397,174 @@ jobs:
       - run-pr-integration
       - run-gardener-integration
       - unit-tests
-    uses: kyma/compliancy/.github/workflows/upload-release-report.yml@main
+    uses: kyma-project/compliancy/.github/workflows/notify-release-report.yml@main
     with:
       release_version: ${{ github.event.inputs.version }}
-    secrets:
-      RELEASE_LOG_UPLOADER_SA: ${{ secrets.RELEASE_LOG_UPLOADER_SA }}
+    secrets: inherit
+
+  create-release:
+    needs:
+      - validate-and-prepare-branch
+      - prepare-release
+      - upload-release-report
+      - build-image
+      - unit-tests
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      KYMA_TELEMETRY_MANAGER_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+          fetch-depth: 0
+      - name: Verify we're on the merged PR commit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.prepare-release.outputs.pr-number }}
+        run: |
+          MERGE_SHA=$(gh pr view "${PR_NUMBER}" --json mergeCommit --jq .mergeCommit.oid)
+          CURRENT_SHA=$(git rev-parse HEAD)
+          
+          if [ "$MERGE_SHA" != "$CURRENT_SHA" ]; then
+            echo "::warning::Expected commit ${MERGE_SHA} but got ${CURRENT_SHA}"
+            echo "Release branch may have additional commits after PR merge"
+          fi
+      - name: Create and push release tag
+        if: ${{ github.event.inputs.dry_run != true }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          RELEASE_BRANCH: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+        run: |
+          echo "Creating release tag ${VERSION} on release branch ${RELEASE_BRANCH}..."
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+
+          echo "Created and pushed tag ${VERSION} from ${RELEASE_BRANCH}"
+
+      - name: Skip tag creation (dry run)
+        if: ${{ github.event.inputs.dry_run == true }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          RELEASE_BRANCH: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+        run: |
+          echo "::notice::DRY RUN: Skipping tag creation for ${VERSION} on ${RELEASE_BRANCH}"
+          echo "Would have created and pushed tag: ${VERSION}"
+
+      - name: Install tools
+        shell: bash
+        run: make install-tools
+
+      - name: Release
+        if: ${{ github.event.inputs.dry_run != true }}
+        run: hack/release.sh ${{ needs.prepare-release.outputs.release-tag }}
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GORELEASER_CURRENT_TAG: "${{ needs.prepare-release.outputs.release-tag }}"
+
+      - name: Skip GitHub release (dry run)
+        if: ${{ github.event.inputs.dry_run == true }}
+        run: |
+          echo "::notice::DRY RUN: Skipping GitHub release creation"
+          echo "Would have run: hack/release.sh ${{ needs.prepare-release.outputs.release-tag }}"
+
+      - name: Package Helm chart
+        run: |
+          OUTPUT=$(helm package ./helm -d ./)
+          FILENAME=$(echo $OUTPUT | grep -o '[^ ]*.tgz')
+          echo "HELM_CHART=$FILENAME" >> $GITHUB_ENV
+
+      - name: Upload Helm chart to release
+        if: ${{ github.event.inputs.dry_run != true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ ! -e ${HELM_CHART} ]] && echo "::error ::Packaged Helm chart does not exist" && exit 1
+          gh release upload ${{ needs.prepare-release.outputs.release-tag }} --clobber ${HELM_CHART}
+
+      - name: Skip Helm chart upload (dry run)
+        if: ${{ github.event.inputs.dry_run == true }}
+        run: |
+          echo "::notice::DRY RUN: Skipping Helm chart upload"
+          echo "Would have uploaded: ${HELM_CHART}"
+
+      - name: Commit and push Helm chart metadata
+        if: ${{ github.event.inputs.dry_run != true }}
+        run: |
+          git config --global user.name "${GITHUB_ACTOR}"
+          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git checkout gh-pages
+          helm repo index --url https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.release-tag }} --merge ./index.yaml ./
+          git add index.yaml
+          git commit -m "Update Helm chart metadata for ${{ needs.prepare-release.outputs.release-tag }}"
+          git push origin gh-pages
+
+      - name: Skip gh-pages update (dry run)
+        if: ${{ github.event.inputs.dry_run == true }}
+        run: |
+          echo "::notice::DRY RUN: Skipping gh-pages Helm chart metadata update"
+          echo "Would have updated index.yaml on gh-pages branch"
+      - name: Release success summary
+        if: ${{ success() && github.event.inputs.dry_run != true }}
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ##  Release ${{ needs.prepare-release.outputs.release-tag }} Published Successfully!
+          
+          ### Release Information
+          - **Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.release-tag }}
+          - **Version**: ${{ needs.prepare-release.outputs.release-tag }}
+          - **Branch**: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+          - **PR**: #${{ needs.prepare-release.outputs.pr-number }}
+          - **OCC Image**: ${{ github.event.inputs.occ_image }}
+          - **Helm Chart**: \`${HELM_CHART}\`
+          
+          ### Docker Images
+          \`\`\`
+          europe-docker.pkg.dev/kyma-project/prod/telemetry-manager:${{ needs.prepare-release.outputs.release-tag }}
+          \`\`\`
+          
+          ### What's Next?
+          1. Verify the release at the URL above
+          2. Announce the release to the team
+          3. Update external documentation if needed
+          
+          EOF
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == true }}
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## Dry Run Summary
+
+          **Version**: ${{ needs.prepare-release.outputs.release-tag }}
+          **Release Branch**: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
+          **OCC Image**: ${{ github.event.inputs.occ_image }}
+
+          ### Completed (Dry Run)
+          - Version validation
+          - Milestone verification
+          - Release branch preparation
+          - Version bump in .env
+          - make generate
+          - Commit to release branch
+          - Docker image build
+          - Unit tests
+          - PR integration tests
+          - Gardener integration tests
+          - Release report upload
+          - Helm chart packaging
+
+          ### Skipped (Dry Run)
+          - Git tag creation
+          - GitHub release creation
+          - Helm chart upload to release
+          - gh-pages update
+
+          ---
+          **To create the actual release**, re-run this workflow with `dry_run` set to `false`.
+          EOF
