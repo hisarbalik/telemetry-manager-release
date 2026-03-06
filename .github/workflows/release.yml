@@ -27,7 +27,7 @@ permissions:
   contents: write
   issues: read
   actions: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   validate-and-prepare-branch:
