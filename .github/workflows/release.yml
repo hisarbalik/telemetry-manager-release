@@ -21,13 +21,14 @@ on:
         required: false
         default: false
         type: boolean
-run-name: "${{ github.event.inputs.dry_run == true && '[DRY RUN] ' || '' }}${{ github.event.inputs.force == true && '[FORCE] ' || '' }}Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}"
+
+run-name: "Release Telemetry version ${{ github.event.inputs.version }} with OCC image ${{ github.event.inputs.occ_image }}, dry-run: ${{ github.event.inputs.dry_run }}, force mode: ${{ github.event.inputs.force }}"
 
 permissions:
   contents: write
   issues: read
   actions: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   validate-and-prepare-branch:
@@ -37,7 +38,7 @@ jobs:
       is-patch: ${{ steps.determine-branch.outputs.is-patch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
       - name: Validate version format
@@ -46,7 +47,7 @@ jobs:
           OCC_IMAGE: ${{ github.event.inputs.occ_image }}
         run: |
           echo "Validating version formats..."
-      
+          
           if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid version format: ${VERSION}"
             echo "Expected format: X.Y.Z (e.g., 1.2.3)"
@@ -59,7 +60,20 @@ jobs:
             echo "Expected format: X.Y.Z-A.B.C (e.g., 1.2.3-4.5.6)"
             exit 1
           fi
-          echo "✓ OCC image version format valid: ${OCC_IMAGE}"
+          echo "OCC image version format valid: ${OCC_IMAGE}"
+          
+          # Check if OCC Docker image exists
+          echo "Checking if OCC Docker image exists..."
+          OCC_IMAGE_REPO="europe-docker.pkg.dev/kyma-project/prod/kyma-otel-collector"
+          OCC_IMAGE_FULL="${OCC_IMAGE_REPO}:${OCC_IMAGE}"
+
+          if docker manifest inspect "${OCC_IMAGE_FULL}" > /dev/null 2>&1; then
+            echo "OCC Docker image exists: ${OCC_IMAGE_FULL}"
+          else
+            echo "::error::OCC Docker image does not exist: ${OCC_IMAGE_FULL}"
+            echo "Please verify the image has been built and pushed to the registry"
+            exit 1
+          fi
       - name: Check if milestone exists and is closed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,7 +123,7 @@ jobs:
           echo "FORCE MODE: Checking for existing release ${VERSION}..."
           if gh release view "${VERSION}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
             echo "::warning::Deleting existing release ${VERSION}"
-            gh release delete "${VERSION}" --repo "${{ github.repository }}" --yes
+            gh release delete "${VERSION}" --repo "${{ github.repository }}" --yes --cleanup-tag
             echo "✓ Deleted existing release ${VERSION}"
           else
             echo "No existing release found for ${VERSION}"
@@ -186,7 +200,7 @@ jobs:
       pr-number: ${{ steps.create-pr.outputs.pr-number }}
     steps:
       - name: Checkout release branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
           fetch-depth: 0
@@ -256,7 +270,6 @@ jobs:
           - Updated \`ENV_HELM_RELEASE_VERSION\` to \`${VERSION}\`
           - Updated \`ENV_MANAGER_IMAGE\` tag to \`${VERSION}\`
           - Updated \`ENV_OTEL_COLLECTOR_IMAGE\` tag to \`${OCC_IMAGE}\`
-          - Ran \`make generate\` to update generated files
 
           ### Review Checklist
           - [ ] Version numbers are correct
@@ -270,8 +283,11 @@ jobs:
           PR_URL=$(gh pr create \
             --base "${RELEASE_BRANCH}" \
             --head "${BUMP_BRANCH}" \
-            --title "Release preparation: Bump version to ${VERSION}" \
-            --body "${PR_BODY}")
+            --title "chore: release preparation: Bump version to ${VERSION}" \
+            --body "${PR_BODY}" \
+            --label "area/release" \
+            --label "kind/chore")
+
 
           PR_NUMBER=$(echo "${PR_URL}" | grep -o '[0-9]*$')
           echo "pr-number=${PR_NUMBER}" >> $GITHUB_OUTPUT
@@ -282,10 +298,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BRANCH: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: |
           PR_NUMBER="${{ steps.create-pr.outputs.pr-number }}"
-          echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 60 minutes)..."
+          echo "Waiting for PR #${PR_NUMBER} to be merged (timeout: 120 minutes)..."
 
           MAX_ATTEMPTS=60 
           ATTEMPT=0
@@ -312,7 +328,7 @@ jobs:
           done
 
           if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
-            echo "::error::Timeout: PR #${PR_NUMBER} was not merged within 60 minutes"
+            echo "::error::Timeout: PR #${PR_NUMBER} was not merged within 120 minutes"
             exit 1
           fi
 
@@ -355,8 +371,8 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     needs:
-    - prepare-release
-    - validate-and-prepare-branch
+      - prepare-release
+      - validate-and-prepare-branch
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -397,11 +413,10 @@ jobs:
       - run-pr-integration
       - run-gardener-integration
       - unit-tests
-    uses: kyma/compliancy/.github/workflows/upload-release-report.yml@main
+    uses: kyma-project/compliancy/.github/workflows/notify-release-report.yml@main
     with:
       release_version: ${{ github.event.inputs.version }}
-    secrets:
-      RELEASE_LOG_UPLOADER_SA: ${{ secrets.RELEASE_LOG_UPLOADER_SA }}
+    secrets: inherit
 
   create-release:
     needs:
@@ -417,7 +432,7 @@ jobs:
       KYMA_TELEMETRY_MANAGER_REPO: ${{ github.repository }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.validate-and-prepare-branch.outputs.release-branch }}
           fetch-depth: 0
@@ -498,8 +513,8 @@ jobs:
       - name: Commit and push Helm chart metadata
         if: ${{ github.event.inputs.dry_run != true }}
         run: |
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git checkout gh-pages
           helm repo index --url https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.release-tag }} --merge ./index.yaml ./
           git add index.yaml
